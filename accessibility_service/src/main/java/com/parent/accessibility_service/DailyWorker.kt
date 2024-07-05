@@ -11,14 +11,17 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 
+const val WORK_FROM_KEY = "WORK_FROM_KEY"
+const val WORK_TO_KEY = "WORK_TO_KEY"
+
 class DailyWorker(
     context: Context,
     workerParams: WorkerParameters
 ) : Worker(context, workerParams) {
 
     override fun doWork(): Result {
-        val inputTo = inputData.getLong(PREF_WORK_TO_KEY, 0L)
-        val inputFrom = inputData.getLong(PREF_WORK_FROM_KEY, 0L)
+        val inputTo = inputData.getLong(WORK_TO_KEY, 0L)
+        val inputFrom = inputData.getLong(WORK_FROM_KEY, 0L)
 
         val newFrom = localDateTimeToMilliseconds(
             LocalDateTime.ofInstant(Instant.ofEpochMilli(inputFrom), ZoneId.systemDefault())
@@ -30,16 +33,13 @@ class DailyWorker(
                 .plusDays(1)
         )
 
-        applicationContext.getSharedPreferences(PREF_FILE_NAME, Context.MODE_PRIVATE)?.edit()?.let {
-            it.putLong(PREF_WORK_TO_KEY, newTo).apply()
-            it.putLong(PREF_WORK_FROM_KEY, newFrom).apply()
-        }
+        applicationContext.addToContentProvider(newFrom, newTo)
 
         val dailyWorkRequest = OneTimeWorkRequestBuilder<DailyWorker>()
             .setInitialDelay(AppBlockerService.calculateDelay(), TimeUnit.MILLISECONDS)
             .build()
-        WorkManager.getInstance(applicationContext)
-            .enqueue(dailyWorkRequest)
+
+        WorkManager.getInstance(applicationContext).enqueue(dailyWorkRequest)
 
         return Result.success()
     }

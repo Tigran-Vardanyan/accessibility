@@ -33,39 +33,45 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         binding = ActivityMainBinding.inflate(layoutInflater)
 
-        AppBlockerService.init(this)
-        val apps = AppBlockerService.getAllApps()
+        val apps = AppBlockerService.getAllApps(this)
 
         findViewById<RecyclerView>(R.id.container).adapter = adapter
         adapter.setData(apps.map { AdapterData(it, false) })
 
-        if (!AppBlockerService.isAccessibilityServiceEnabled()) {
+        if (!AppBlockerService.isAccessibilityServiceEnabled(this)) {
             Handler().postDelayed({
                 navigateToAccessibilitySettings()
             }, 5000)
         }
 
-        if (!AppBlockerService.checkUsageStatsPermission()) {
+        if (!AppBlockerService.checkUsageStatsPermission(this)) {
             requestPackageUsageStatsPermission()
         }
 
         findViewById<Button>(R.id.button).setOnClickListener { _ ->
-            AppBlockerService.appsToBeBlocked(adapter.getData().map { it.appPackage }.toTypedArray())
+            AppBlockerService.appsToBeBlocked(
+                this,
+                adapter.getData().map { it.appPackage }.toTypedArray()
+            )
         }
 
         findViewById<Button>(R.id.buttonTime).setOnClickListener { _ ->
             val c = Calendar.getInstance()
             c.add(Calendar.SECOND, 10)
             val from = c.timeInMillis
-            c.add(Calendar.MINUTE, 5)
+            c.add(Calendar.MINUTE, 15)
             val to = c.timeInMillis
-            AppBlockerService.workingTime(from, to)
+            AppBlockerService.workingTime(this, from, to)
         }
 
         val calendar = Calendar.getInstance()
         calendar.add(Calendar.DAY_OF_MONTH, -1)
 
-        val list = AppBlockerService.getAppUsageStatsWithData(calendar.timeInMillis, System.currentTimeMillis())
+        val list = AppBlockerService.getAppUsageStatsWithData(
+            this,
+            calendar.timeInMillis,
+            System.currentTimeMillis()
+        )
         list.forEach {
             println("getAppUsageStatsWithData ${it.appData.appPackage}, ${it.usageStats.totalTimeVisible}")
         }

@@ -1,15 +1,14 @@
 package com.parent.accessibility_service
 
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
+import android.content.ContentValues
 import android.content.Context
 import android.content.Context.APP_OPS_SERVICE
-import android.content.Context.MODE_PRIVATE
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -33,23 +32,13 @@ class AppBlockerService {
         const val SERVICE_DISABLED = "SERVICE_DISABLED"
         const val INTENT_BUNDLE_KEY = "INTENT_BUNDLE_KEY"
 
-        @SuppressLint("StaticFieldLeak")
-        private var activity: Activity? = null
-
         private var blockedApp: String? = null
         private var serviceDisabled = false
 
-        @JvmStatic
-        fun init(activity: Activity) {
-            this.activity = activity
-        }
-
-        private fun bringAppToForeground(data: String?) {
-            activity?.let {
-                val intent = Intent(it, it::class.java)
-                intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                ContextCompat.startActivity(it, intent, bundleOf(INTENT_BUNDLE_KEY to data))
-            }
+        private fun bringAppToForeground(data: String?, context: Context) {
+            val intent = Intent("com.phys.intent.action.ACTION_LAUNCH_MAIN")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ContextCompat.startActivity(context, intent, bundleOf(INTENT_BUNDLE_KEY to data))
         }
 
         @JvmStatic
@@ -67,9 +56,7 @@ class AppBlockerService {
         }
 
         @JvmStatic
-        fun getAllApps(): Array<AppData> {
-            val activity = this.activity ?: return emptyArray()
-
+        fun getAllApps(activity: Activity): Array<AppData> {
             val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
             val resolveInfoList: List<ResolveInfo> =
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -113,27 +100,28 @@ class AppBlockerService {
          * @param apps - apps packages to be blocked
          */
         @JvmStatic
-        fun appsToBeBlocked(apps: Array<String>) {
-            activity?.applicationContext?.getSharedPreferences(PREF_FILE_NAME, MODE_PRIVATE)?.edit()
-                ?.putStringSet(PREF_BLOCKED_APP_KEY, apps.toSet())?.apply()
+        fun appsToBeBlocked(activity: Activity, apps: Array<String>) {
+            val contentResolver = activity.contentResolver
+            contentResolver.delete(ContentProviderContract.CONTENT_URI_APP, null, null)
+            apps.forEach {
+                val contentValues = ContentValues().apply {
+                    put(ContentProviderContract.Data.COLUMN_PACKAGES, it)
+                }
+                contentResolver.insert(ContentProviderContract.CONTENT_URI_APP, contentValues)
+            }
         }
 
         @JvmStatic
-        fun workingTime(from: Long, to: Long) {
-            activity?.applicationContext?.getSharedPreferences(PREF_FILE_NAME, MODE_PRIVATE)?.edit()
-                ?.let {
-                    it.putLong(PREF_WORK_TO_KEY, to).apply()
-                    it.putLong(PREF_WORK_FROM_KEY, from).apply()
-                }
-            activity?.applicationContext?.let {
-                startDailyWorker(it, from, to)
-            }
+        fun workingTime(activity: Activity, from: Long, to: Long) {
+            activity.applicationContext.addToContentProvider(from, to)
+
+            startDailyWorker(activity.applicationContext, from, to)
         }
 
         private fun startDailyWorker(context: Context, from: Long, to: Long) {
             val inputData = Data.Builder()
-                .putLong(PREF_WORK_TO_KEY, to)
-                .putLong(PREF_WORK_FROM_KEY, from)
+                .putLong(WORK_TO_KEY, to)
+                .putLong(WORK_FROM_KEY, from)
                 .build()
 
             val dailyWorkRequest = OneTimeWorkRequestBuilder<DailyWorker>()
@@ -184,61 +172,54 @@ class AppBlockerService {
         }
 
         @JvmStatic
-        fun isAccessibilityServiceEnabled(): Boolean {
-            activity?.let { activity ->
-                val accessibilityManager =
-                    activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-                val enabledServices =
-                    accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-                val serviceComponentName =
-                    ComponentName(activity, AppBlockerAccessibilityService::class.java)
+        fun isAccessibilityServiceEnabled(activity: Activity): Boolean {
+            val accessibilityManager =
+                activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+            val enabledServices =
+                accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            val serviceComponentName =
+                ComponentName(activity, AppBlockerAccessibilityService::class.java)
 
-                return enabledServices.any {
-                    it.resolveInfo.serviceInfo.packageName == activity.packageName && it.resolveInfo.serviceInfo.name == serviceComponentName.className
-                }
+            return enabledServices.any {
+                it.resolveInfo.serviceInfo.packageName == activity.packageName && it.resolveInfo.serviceInfo.name == serviceComponentName.className
             }
-            return false
         }
 
         @JvmStatic
-        fun checkUsageStatsPermission(): Boolean {
-            activity?.let {
-                val appOpsManager = it.getSystemService(APP_OPS_SERVICE) as AppOpsManager
-                val mode = appOpsManager.unsafeCheckOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    android.os.Process.myUid(),
-                    it.packageName
-                )
-                return mode == AppOpsManager.MODE_ALLOWED
-            }
-            return false
+        fun checkUsageStatsPermission(activity: Activity): Boolean {
+            val appOpsManager = activity.getSystemService(APP_OPS_SERVICE) as AppOpsManager
+            val mode = appOpsManager.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(),
+                activity.packageName
+            )
+            return mode == AppOpsManager.MODE_ALLOWED
         }
 
         @JvmStatic
-        fun getAppUsageData(beginTime: Long, endTime: Long): Array<UsageStats> {
-            activity?.let {
-                val usageStatsManager =
-                    it.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-                return usageStatsManager.queryUsageStats(
-                    UsageStatsManager.INTERVAL_BEST,
-                    beginTime,
-                    endTime
-                )
-                    .toTypedArray()
-            }
-
-            return emptyArray()
+        fun getAppUsageData(activity: Activity, beginTime: Long, endTime: Long): Array<UsageStats> {
+            val usageStatsManager =
+                activity.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            return usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_BEST,
+                beginTime,
+                endTime
+            ).toTypedArray()
         }
 
         @JvmStatic
-        fun appData(packageName: String): AppData? {
-            return getAllApps().find { it.appPackage == packageName }
+        fun appData(activity: Activity, packageName: String): AppData? {
+            return getAllApps(activity).find { it.appPackage == packageName }
         }
 
         @JvmStatic
-        fun getAppUsageStatsWithData(beginTime: Long, endTime: Long): Array<AppUsageData> {
-            val apps = getAllApps()
-            val usageStats = getAppUsageData(beginTime, endTime)
+        fun getAppUsageStatsWithData(
+            activity: Activity,
+            beginTime: Long,
+            endTime: Long
+        ): Array<AppUsageData> {
+            val apps = getAllApps(activity)
+            val usageStats = getAppUsageData(activity, beginTime, endTime)
 
             return usageStats.map { usage ->
                 apps.find { it.appPackage == usage.packageName }?.let {
@@ -247,20 +228,28 @@ class AppBlockerService {
             }.mapNotNull { it }.toTypedArray()
         }
 
-        fun onInterrupt() {
+        fun onInterrupt(context: Context) {
             serviceDisabled = true
-            bringAppToForeground(SERVICE_DISABLED)
-            activity = null
+            bringAppToForeground(SERVICE_DISABLED, context)
         }
 
-        fun onDestroy() {
+        fun onDestroy(context: Context) {
             serviceDisabled = true
-            bringAppToForeground(SERVICE_DISABLED)
-            activity = null
+            bringAppToForeground(SERVICE_DISABLED, context)
         }
 
-        fun onBlock(packageName: String) {
-            bringAppToForeground(packageName)
+        fun onBlock(packageName: String, context: Context) {
+            bringAppToForeground(packageName, context)
         }
     }
+}
+
+fun Context.addToContentProvider(from: Long, to: Long) {
+    val contentValues = ContentValues().apply {
+        put(ContentProviderContract.Data.COLUMN_FROM, from)
+        put(ContentProviderContract.Data.COLUMN_TO, to)
+    }
+
+    contentResolver.delete(ContentProviderContract.CONTENT_URI_WORK, null, null)
+    contentResolver.insert(ContentProviderContract.CONTENT_URI_WORK, contentValues)
 }

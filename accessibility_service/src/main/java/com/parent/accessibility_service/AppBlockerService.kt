@@ -1,6 +1,7 @@
 package com.parent.accessibility_service
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageStats
@@ -16,7 +17,10 @@ import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
@@ -25,16 +29,24 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import java.io.ByteArrayOutputStream
 import java.util.Calendar
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class AppBlockerService {
     companion object {
         const val SERVICE_DISABLED = "SERVICE_DISABLED"
         const val INTENT_BUNDLE_KEY = "INTENT_BUNDLE_KEY"
+        const val OVERLAY_REQUEST_CODE = 101
+        @SuppressLint("StaticFieldLeak")
+        private var activity: Activity? = null
 
         private var blockedApp: String? = null
         private var serviceDisabled = false
 
+        @JvmStatic
+        fun init(activity: Activity) {
+            this.activity = activity
+        }
         private fun bringAppToForeground(data: String?, context: Context) {
             val intent = Intent("com.phys.intent.action.ACTION_LAUNCH_MAIN")
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -183,17 +195,105 @@ class AppBlockerService {
             return enabledServices.any {
                 it.resolveInfo.serviceInfo.packageName == activity.packageName && it.resolveInfo.serviceInfo.name == serviceComponentName.className
             }
+            return false
+        }
+        @JvmStatic
+        private fun navigateToAccessibilitySettings() {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            activity?.startActivity(intent)
         }
 
         @JvmStatic
-        fun checkUsageStatsPermission(activity: Activity): Boolean {
-            val appOpsManager = activity.getSystemService(APP_OPS_SERVICE) as AppOpsManager
-            val mode = appOpsManager.unsafeCheckOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                android.os.Process.myUid(),
-                activity.packageName
-            )
-            return mode == AppOpsManager.MODE_ALLOWED
+        fun requestPackageUsageStatsPermission() {
+            activity?.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+
+        @JvmStatic
+        fun checkUsageStatsPermission(): Boolean {
+            activity?.let {
+                val appOpsManager = it.getSystemService(APP_OPS_SERVICE) as AppOpsManager
+                val mode = appOpsManager.unsafeCheckOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(),
+                    it.packageName
+                )
+                return mode == AppOpsManager.MODE_ALLOWED
+            }
+            return false
+        }
+        @JvmStatic
+        fun requestSystemAlertWindowPermission() {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+            activity?.startActivity(intent)
+        }
+        @JvmStatic
+        fun checkSystemAlertWindowPermission(): Boolean {
+            return Settings.canDrawOverlays(activity)
+        }
+        @JvmStatic
+        fun checkOverlayPermission(): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Settings.canDrawOverlays(activity)
+            } else {
+                true
+            }
+        }
+        @JvmStatic
+        fun requestIgnoreBatteryOptimizationsPermission() {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            intent.data = Uri.parse("package:${activity?.packageName}")
+            activity?.startActivity(intent)
+        }
+        @JvmStatic
+        fun checkIgnoreBatteryOptimizationsPermission(): Boolean {
+            val powerManager = activity?.getSystemService(Context.POWER_SERVICE) as PowerManager
+            return powerManager.isIgnoringBatteryOptimizations(activity?.packageName)
+        }
+        @JvmStatic
+        fun hasAccessRestrictedPerm(): Boolean {
+            return if (Build.VERSION.SDK_INT < 33) {
+                true
+            } else {
+                activity?.applicationContext.let {
+                    try {
+                        val packageManager = it?.packageManager as PackageManager
+                        val applicationInfo = packageManager.getApplicationInfo(it.packageName, 0)
+                        val appOpsManager =
+                            it.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+                        val mode = appOpsManager.unsafeCheckOpNoThrow(
+                            "android:access_restricted_settings",
+                            applicationInfo.uid,
+                            applicationInfo.packageName
+                        )
+                        mode == AppOpsManager.MODE_ALLOWED
+                    } catch (e: PackageManager.NameNotFoundException) {
+                        false
+                    } catch (e: SecurityException) {
+                        false
+                    }
+                }
+            }
+        }
+
+
+        @JvmStatic
+        fun requestOverlayPermission() {
+            activity?.let { act ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+                    if ("xiaomi".equals(Build.MANUFACTURER.lowercase(Locale.ROOT))) {
+                        val intent = Intent().apply {
+                            setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                            putExtra("extra_pkgname", act.packageName)
+                        }
+                        act.startActivity(intent)
+                    } else {
+                        val overlaySettings = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + act.packageName))
+                        act.startActivityForResult(overlaySettings, OVERLAY_REQUEST_CODE)
+
+                    }
+                }
+            }
         }
 
         @JvmStatic

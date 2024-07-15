@@ -37,6 +37,7 @@ class AppBlockerService {
         const val SERVICE_DISABLED = "SERVICE_DISABLED"
         const val INTENT_BUNDLE_KEY = "INTENT_BUNDLE_KEY"
         const val OVERLAY_REQUEST_CODE = 101
+        const val POPUP_REQUEST_CODE = 102
         @SuppressLint("StaticFieldLeak")
         private var activity: Activity? = null
 
@@ -295,7 +296,25 @@ class AppBlockerService {
                 }
             }
         }
+        @JvmStatic
+        fun checkPopupWindowPermission(): Boolean {
+            val context = activity?.applicationContext
+            val appOpsManager = context?.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
+            val mode = appOpsManager?.unsafeCheckOpNoThrow(
+                "android:system_alert_window",
+                android.os.Process.myUid(),
+                context.packageName
+            )
+            return mode == AppOpsManager.MODE_ALLOWED
+        }
 
+        @JvmStatic
+        fun requestPopupWindowPermission() {
+            activity?.let { act ->
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + act.packageName))
+                act.startActivityForResult(intent, POPUP_REQUEST_CODE)
+            }
+        }
         @JvmStatic
         fun getAppUsageData(activity: Activity, beginTime: Long, endTime: Long): Array<UsageStats> {
             val usageStatsManager =
